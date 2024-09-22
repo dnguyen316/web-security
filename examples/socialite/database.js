@@ -35,4 +35,10 @@ await db.run(`CREATE TABLE IF NOT EXISTS posts (
         FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE
     )`);
 
+await db.run(`CREATE TABLE IF NOT EXISTS session (
+        sessionId INTEGER PRIMARY KEY AUTOINCREMENT,
+        userId INTEGER NOT NULL,
+        token TEXT,
+    )`);
+
 export { db };

@@ -1,6 +1,7 @@
 import { startServer, createServer } from '#shared';
-
+import { v4 as uuid } from 'uuid';
 import { db } from './database.js';
+import crypto from 'crypto';
 
 import {
   authenticate,
@@ -10,6 +11,25 @@ import {
 } from './middleware/index.js';
 
 import { userExists, updateUser } from './utilities/index.js';
+
+/**
+ * @params {string} sessionId
+ */
+export const getSession = async (sessionId) => {
+  return await db.get(`SELECT * FROM sessionId WHERE sessionId = ?`, sessionId)
+}
+
+/**
+ * @params {string} userId
+ */
+export const createSession = async (userId) => {
+  const sessionId = uuid();
+  const token = uuid();
+
+  db.run(`
+    INSERT INTO sessions (sessionId, userId, token) VALUES (?, ?, ?)
+  `, [sessionId, userId, token]);
+}
 
 const app = createServer({ viewEngine: 'handlebars' });
 
@@ -54,12 +74,30 @@ app.post('/login', async (req, res) => {
       .render('login', { error: 'Invalid login credentials.' });
   }
 
-  res.cookie('sessionId', user.id);
+  const sessionId = crypto.randomBytes(16).toString('hex');
+  const token  = uuid();
+
+  try {
+    await db.run(
+      `INSERT INTO sessions (sessionId, userId, token) VALUES (?, ?, ?)`,
+      [sessionId, user.id, token]
+    )
+  }
+
+  res.cookie('sessionId', sessionId);
   res.redirect('/');
 });
 
 // User logout
 app.post('/logout', authenticate, (req, res) => {
+  const sessionId = req.cookies.sessionId;
+
+  if(!sessionId) {
+    return res.redirect('/login');
+  }
+
+  await db.run('DELETE FROM sessions WHERE sessionId = ?', [sessionId]);
+
   res.clearCookie('sessionId');
   res.redirect('/');
 });
@@ -82,7 +120,17 @@ app.post('/account', async (req, res) => {
 
     const user = await db.get('SELECT id FROM users WHERE id = ?', [lastID]);
 
-    res.cookie('sessionId', user.id);
+    const sessionId = crypto.randomBytes(16).toString('hex');
+    const token  = uuid();
+  
+    try {
+      await db.run(
+        `INSERT INTO sessions (sessionId, userId, token) VALUES (?, ?, ?)`,
+        [sessionId, user.id, token]
+      )
+    }
+
+    res.cookie('sessionId', sessionId);
     res.redirect('/');
   } catch (error) {
     console.error(error);
@@ -99,6 +147,16 @@ app.post('/account', async (req, res) => {
 
 app.patch('/account', authenticate, async (req, res) => {
   try {
+
+    const { token } = db.get(
+      "SELECT token FROM sessions WHERE userId = ?",
+      req.user.id
+    )
+
+    if(token !== req.body._csrf) {
+      return res.status(403).send("Unauthorized");
+    }
+
     await updateUser(req.user.id, req, res);
     res.render('profile', { title: 'Profile', message: 'Profile updated.' });
   } catch (error) {
@@ -113,6 +171,16 @@ app.patch('/account', authenticate, async (req, res) => {
 // Delete account
 app.delete('/account', authenticate, async (req, res) => {
   try {
+
+    const { token } = db.get(
+      "SELECT token FROM sessions WHERE userId = ?",
+      req.user.id
+    )
+
+    if(token !== req.body._csrf) {
+      return res.status(403).send("Unauthorized");
+    }
+
     await db.run('DELETE FROM users WHERE id = ?', [req.user.id]);
 
     res.clearCookie('sessionId');
